@@ -1,0 +1,15 @@
+model_name: "UBC-NLP/MARBERT"
+task_name: "atypes"
+num_labels: 3
+seed: 42
+batch_size: 8
+grad_accum_steps: 1
+lr: 2e-5
+epochs: 15
+weight_decay: 0.0
+dropout: 0.1
+early_stop_patience: 10
+threshold: 0.5
+max_length: 256
+fp16: true
+
