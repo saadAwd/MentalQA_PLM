@@ -59,19 +59,19 @@ python -m src.train --config configs/marbert_atypes.yaml
 python -m src.evaluate --config configs/marbert_qtypes.yaml --checkpoint outputs/qtypes/best --test data/qtypes_test.jsonl
 ```
 
-## Expected Results
+## Achived Results by runinig this configuration
 
-Based on paper (Table 4):
+### Q-types Classification Results
 
-### MARBERT (fine-tuned) — Q-types:
-- F1-Micro ≈ **0.85**
-- F1-Weighted ≈ **0.85**
-- Jaccard ≈ **0.80**
+| Approach | Samples | F1-Micro | F1-Weighted | Jaccard | Loss | Rank |
+|----------|---------|----------|-------------|---------|------|------|
+| **Selective Back-Translation** | 229 | **63.4%**  | **59.1%**  | 52.6% | 0.430 | **1st** |
+| **Simple Augmentation** | 398 | 62.2% | 56.5% | 51.9% | 0.443 | 2nd |
+| **Qwen Augmented** | 329 | 62.1% | 57.0% | 51.8% | 0.437 | 3rd |
+| **No Augmentation** | 210 | 61.7% | 58.1% | **52.9%**  | **0.423**  | 4th |
+| **Selective + Paraphrasing (BT)** | 311 | 60.4% | 57.3% | 51.2% | 0.436 | 5th |
+| **Full Back-Translation** | 423 | 59.6% | 56.8% | 50.5% | 0.534 | 6th |
 
-### MARBERT (fine-tuned) — A-types:
-- F1-Micro ≈ **0.95**
-- F1-Weighted ≈ **0.95**
-- Jaccard ≈ **0.94**
 
 ## Configuration
 
