@@ -99,7 +99,7 @@ Hyperparameters (from Table 3):
 
 Fixed random seed: 42
 
-## Citation
-
-Please cite the original MentalQA paper when using this code.
-
+## Refrence
+THis work has been done in an effort to reproduce the high score achived in this paper 
+Alhuzali & Alasmari, 2025 — Pre-Trained LMs for Arabic Mental-Health Q&A Classification (MDPI).
+https://www.mdpi.com/2227-9032/13/9/985
