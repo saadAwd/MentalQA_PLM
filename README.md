@@ -75,18 +75,6 @@ python -m src.evaluate --config configs/marbert_qtypes.yaml --checkpoint outputs
 
 ## Experimental Results & Data Augmentation Strategies
 
-### Q-types Classification Results
-
-We tested multiple data augmentation strategies to address class imbalance. Results on validation set:
-
-| Approach | Samples | F1-Micro | F1-Weighted | Jaccard | Loss | Rank |
-|----------|---------|----------|-------------|---------|------|------|
-| **Selective Back-Translation** ⭐ | 229 | **63.4%** 🥇 | **59.1%** 🥇 | 52.6% | 0.430 | **1st** |
-| Simple Augmentation | 398 | 62.2% | 56.5% | 51.9% | 0.443 | 2nd |
-| Qwen Augmented | 329 | 62.1% | 57.0% | 51.8% | 0.437 | 3rd |
-| No Augmentation | 210 | 61.7% | 58.1% | **52.9%** 🥇 | **0.423** 🥇 | 4th |
-| Selective + Paraphrasing (BT) | 311 | 60.4% | 57.3% | 51.2% | 0.436 | 5th |
-| Full Back-Translation | 423 | 59.6% | 56.8% | 50.5% | 0.534 | 6th |
 
 ### Data Augmentation Strategies
 
@@ -154,7 +142,6 @@ Training for A-types (answer types) classification is currently in progress. Res
 - F1-Weighted: ~95%
 - Jaccard: ~94%
 
-**Note**: The same augmentation strategies tested for Q-types (No Augmentation, Simple Augmentation, Full Back-Translation, Selective Back-Translation, Qwen Augmented, etc.) will be evaluated for A-types classification. Results will be added to this section once training completes.
 
 ## Configuration
 
