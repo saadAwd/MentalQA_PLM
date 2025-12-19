@@ -158,22 +158,26 @@ def _build_context_from_chunks(chunks: List[Dict], max_chars: int = 4000) -> str
                     break
         
         # CRITICAL: Filter out Quranic content to avoid misuse
-        # Only filter if it's clearly a Quranic verse, not just diacritics
+        # VERY CONSERVATIVE: Only filter if it's clearly a Quranic verse with verse numbers
         import re
-        # Pattern 1: Verse markers like [غافر ٦٠], [البقرة ٢٥٥], etc. (MUST have verse marker)
-        quran_verse_pattern = r'\[[^\]]*(?:غافر|البقرة|النساء|المائدة|الأنعام|الأعراف|التوبة|يونس|هود|يوسف|إبراهيم|النحل|مريم|طه|الأنبياء|الحج|النور|الفرقان|الشعراء|النمل|القصص|العنكبوت|الروم|لقمان|السجدة|الأحزاب|سبأ|فاطر|يس|الصافات|ص|الزمر|فصلت|الشورى|الزخرف|الدخان|الجاثية|الأحقاف|محمد|الفتح|الحجرات|ق|الذاريات|الطور|النجم|القمر|الرحمن|الواقعة|الحديد|المجادلة|الحشر|الممتحنة|الصف|الجمعة|المنافقون|التغابن|الطلاق|التحريم|الملك|القلم|الحاقة|المعارج|نوح|الجن|المزمل|المدثر|القيامة|الإنسان|المرسلات|النبأ|النازعات|عبس|التكوير|الانفطار|المطففين|الانشقاق|البروج|الطارق|الأعلى|الغاشية|الفجر|البلد|الشمس|الليل|الضحى|الشرح|التين|العلق|القدر|البينة|الزلزلة|العاديات|القارعة|التكاثر|العصر|الهمزة|الفيل|قريش|الماعون|الكوثر|الكافرون|النصر|المسد|الإخلاص|الفلق|الناس)[^\]]*\]'
-        # Pattern 2: Quranic verse markers ﴾ and ﴿ (only if they appear together or with verse numbers)
-        quran_markers = r'[﴾﴿]'
-        # Pattern 3: Specific Quranic phrases (not just diacritics) - only filter if verse marker also present
-        # Only filter if BOTH verse marker AND diacritics are present (more specific)
-        has_verse_marker = re.search(quran_verse_pattern, text, re.IGNORECASE) or re.search(quran_markers, text)
-        has_quranic_phrase = re.search(r'بَادَتِی.*سَیَدۡخُلُونَ.*جَهَنَّمَ.*دَاخِرِینَ', text) or re.search(r'جَهَنَّمَ.*دَاخِرِینَ', text)
+        # Pattern 1: Verse markers with numbers like [غافر ٦٠], [البقرة ٢٥٥], etc.
+        # Must have both surah name AND verse number
+        quran_verse_with_number = r'\[[^\]]*(?:غافر|البقرة|النساء|المائدة|الأنعام|الأعراف|التوبة|يونس|هود|يوسف|إبراهيم|النحل|مريم|طه|الأنبياء|الحج|النور|الفرقان|الشعراء|النمل|القصص|العنكبوت|الروم|لقمان|السجدة|الأحزاب|سبأ|فاطر|يس|الصافات|ص|الزمر|فصلت|الشورى|الزخرف|الدخان|الجاثية|الأحقاف|محمد|الفتح|الحجرات|ق|الذاريات|الطور|النجم|القمر|الرحمن|الواقعة|الحديد|المجادلة|الحشر|الممتحنة|الصف|الجمعة|المنافقون|التغابن|الطلاق|التحريم|الملك|القلم|الحاقة|المعارج|نوح|الجن|المزمل|المدثر|القيامة|الإنسان|المرسلات|النبأ|النازعات|عبس|التكوير|الانفطار|المطففين|الانشقاق|البروج|الطارق|الأعلى|الغاشية|الفجر|البلد|الشمس|الليل|الضحى|الشرح|التين|العلق|القدر|البينة|الزلزلة|العاديات|القارعة|التكاثر|العصر|الهمزة|الفيل|قريش|الماعون|الكوثر|الكافرون|النصر|المسد|الإخلاص|الفلق|الناس)[^\]]*[٠-٩0-9]+[^\]]*\]'
+        # Pattern 2: Quranic verse markers ﴾ and ﴿ together (both must be present)
+        quran_markers_both = r'[﴾].*[﴿]'
+        # Pattern 3: Specific complete Quranic phrases (very specific)
+        complete_quranic_phrase = r'بَادَتِی.*سَیَدۡخُلُونَ.*جَهَنَّمَ.*دَاخِرِینَ.*[﴾]'
         
-        # Only filter if it's clearly a Quranic verse (has marker AND phrase, or just markers)
-        is_quranic = has_verse_marker or (has_verse_marker and has_quranic_phrase)
+        # VERY CONSERVATIVE: Only filter if it's clearly a Quranic verse
+        # Must have verse marker with number, OR both markers, OR complete phrase with marker
+        is_quranic = (
+            re.search(quran_verse_with_number, text, re.IGNORECASE) or
+            re.search(quran_markers_both, text) or
+            re.search(complete_quranic_phrase, text)
+        )
         
         if is_quranic:
-            print(f"⚠ Skipping chunk {i} - contains Quranic content (to avoid misuse)")
+            print(f"⚠ Skipping chunk {i} - contains Quranic verse (to avoid misuse)")
             continue
         
         # Skip chunks with obviously corrupted text
@@ -835,9 +839,10 @@ class RAGQAPipeline:
             
             # Remove mixed-language content (non-Arabic/Latin characters)
             import re
-            # Remove Chinese, Japanese, Korean, and other non-Arabic/Latin characters
+            # Remove Chinese, Japanese, Korean characters (CJK Unified Ideographs)
             # Keep Arabic, Latin, numbers, punctuation, and common symbols
-            answer_text = re.sub(r'[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0020-\u007E\u00A0-\u00FF\u0100-\u017F\u2000-\u206F\u20A0-\u20CF\u2100-\u214F]', '', answer_text)
+            # Remove: \u4E00-\u9FFF (CJK), \u3400-\u4DBF (CJK Extension A), etc.
+            answer_text = re.sub(r'[\u4E00-\u9FFF\u3400-\u4DBF\u20000-\u2A6DF\u2A700-\u2B73F\u2B740-\u2B81F\u2B820-\u2CEAF]', '', answer_text)
             
             answer_text = answer_text.strip()
             
