@@ -256,9 +256,12 @@ def _build_prompt_ar(query: str, context: str, tokenizer=None, use_chat_template
                 {"role": "user", "content": user_instruction}
             ]
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            print(f"   [DEBUG] Chat template applied, prompt length: {len(prompt)}")
             return prompt
         except Exception as e:
             print(f"⚠ Chat template failed ({e}), using simple format")
+            import traceback
+            traceback.print_exc()
     
     # Simple format for MT5 and other models
     prompt = (
@@ -432,6 +435,12 @@ class RAGQAPipeline:
         
         # Check if tokenizer has chat_template (for Qwen/Saka models)
         has_chat_template = hasattr(tokenizer, "chat_template") and tokenizer.chat_template is not None
+        # Force chat template for Saka models (they require it)
+        if "saka" in model_name.lower():
+            if not has_chat_template:
+                print("  ⚠️  Warning: Saka model should have chat_template, but it's missing")
+            else:
+                print("  ✓ Using chat template for Saka model")
         self.has_chat_template = has_chat_template
         self.is_causal = is_causal
         
@@ -782,40 +791,65 @@ class RAGQAPipeline:
                     prompt_tokens = prompt_tokens.to(self.device)
                 input_length = prompt_tokens.shape[1]
                 
-                # Use pipeline's generate method (more reliable - handles formatting correctly)
-                # The pipeline method is simpler and handles all edge cases
-                gen_outputs = self.generator(
-                    prompt,
-                    max_new_tokens=self.max_new_tokens,
-                    num_return_sequences=1,
-                    do_sample=True,
-                    temperature=0.8,
-                    top_p=0.95,
-                    repetition_penalty=1.1,
-                    pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
-                )
+                # Use direct model.generate() for better control and debugging
+                # This gives us more control over the generation process
+                attention_mask = torch.ones_like(prompt_tokens)
+                pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
                 
-                # Extract answer from pipeline output
-                full_text = gen_outputs[0]["generated_text"]
+                # Debug: Print prompt preview
+                print(f"   [DEBUG] Prompt length: {len(prompt)} chars")
+                print(f"   [DEBUG] Prompt preview (last 300 chars): {prompt[-300:]}")
+                print(f"   [DEBUG] Using chat template: {self.has_chat_template}")
                 
-                # Extract only the new part (remove prompt)
-                if prompt in full_text:
-                    answer_text = full_text[len(prompt):].strip()
-                else:
-                    # If prompt not found, try to find where answer starts
-                    # Look for common Arabic answer markers
-                    answer_markers = ["الإجابة:", "الرد:", "الجواب:", "بناءً على", "الاستشارة:"]
-                    answer_text = full_text
+                with torch.no_grad():
+                    generated_tokens = model.generate(
+                        prompt_tokens,
+                        attention_mask=attention_mask,
+                        max_new_tokens=self.max_new_tokens,
+                        min_length=input_length + 50,  # Ensure minimum length
+                        num_return_sequences=1,
+                        do_sample=True,
+                        temperature=0.7,  # Slightly lower for more focused output
+                        top_p=0.9,
+                        repetition_penalty=1.1,
+                        pad_token_id=pad_token_id,
+                        eos_token_id=tokenizer.eos_token_id,
+                        no_repeat_ngram_size=3,
+                    )
+                
+                # Decode the full sequence
+                full_decoded = tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
+                
+                # Debug: Print full decoded text
+                print(f"   [DEBUG] Full decoded length: {len(full_decoded)} chars")
+                print(f"   [DEBUG] Full decoded (first 500 chars): {full_decoded[:500]}")
+                print(f"   [DEBUG] Full decoded (last 500 chars): {full_decoded[-500:]}")
+                
+                # Extract only the new tokens (skip input prompt)
+                new_tokens = generated_tokens[0][input_length:]
+                answer_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+                
+                # If answer extraction failed or is too short, try alternative methods
+                if len(answer_text) < 20:
+                    print(f"   [DEBUG] Extracted answer too short ({len(answer_text)} chars), trying alternative extraction...")
+                    # Try to find answer after common markers
+                    answer_markers = ["الإجابة:", "الرد:", "الجواب:", "بناءً على"]
                     for marker in answer_markers:
-                        if marker in full_text:
-                            parts = full_text.split(marker, 1)
+                        if marker in full_decoded:
+                            parts = full_decoded.split(marker, 1)
                             if len(parts) > 1:
-                                answer_text = parts[1].strip()
-                                break
+                                potential_answer = parts[1].strip()
+                                if len(potential_answer) > len(answer_text):
+                                    answer_text = potential_answer
+                                    break
                     
-                    # If still no good extraction, use everything after first 100 chars (skip prompt)
-                    if len(answer_text) == len(full_text) and len(full_text) > 100:
-                        answer_text = full_text[100:].strip()
+                    # If still short, try removing prompt from full text
+                    if len(answer_text) < 20 and prompt in full_decoded:
+                        answer_text = full_decoded.split(prompt, 1)[-1].strip()
+                    
+                    # Last resort: use everything after input_length chars
+                    if len(answer_text) < 20:
+                        answer_text = full_decoded[max(input_length, len(full_decoded) - 1000):].strip()
                 
                 # If answer is mostly punctuation, something went wrong - use extractive fallback
                 if len(answer_text) > 0:
