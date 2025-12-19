@@ -157,6 +157,26 @@ def _build_context_from_chunks(chunks: List[Dict], max_chars: int = 4000) -> str
                         text = text[len(prefix):].strip()
                     break
         
+        # CRITICAL: Filter out Quranic content to avoid misuse
+        # Check for Quranic verse markers and common patterns
+        import re
+        # Pattern 1: Verse markers like [غافر ٦٠], [البقرة ٢٥٥], etc.
+        quran_verse_pattern = r'\[[^\]]*(?:غافر|البقرة|النساء|المائدة|الأنعام|الأعراف|التوبة|يونس|هود|يوسف|إبراهيم|النحل|مريم|طه|الأنبياء|الحج|النور|الفرقان|الشعراء|النمل|القصص|العنكبوت|الروم|لقمان|السجدة|الأحزاب|سبأ|فاطر|يس|الصافات|ص|الزمر|فصلت|الشورى|الزخرف|الدخان|الجاثية|الأحقاف|محمد|الفتح|الحجرات|ق|الذاريات|الطور|النجم|القمر|الرحمن|الواقعة|الحديد|المجادلة|الحشر|الممتحنة|الصف|الجمعة|المنافقون|التغابن|الطلاق|التحريم|الملك|القلم|الحاقة|المعارج|نوح|الجن|المزمل|المدثر|القيامة|الإنسان|المرسلات|النبأ|النازعات|عبس|التكوير|الانفطار|المطففين|الانشقاق|البروج|الطارق|الأعلى|الغاشية|الفجر|البلد|الشمس|الليل|الضحى|الشرح|التين|العلق|القدر|البينة|الزلزلة|العاديات|القارعة|التكاثر|العصر|الهمزة|الفيل|قريش|الماعون|الكوثر|الكافرون|النصر|المسد|الإخلاص|الفلق|الناس)[^\]]*\]'
+        # Pattern 2: Quranic verse markers ﴾ and ﴿
+        quran_markers = r'[﴾﴿]'
+        # Pattern 3: Common Quranic diacritics patterns (heavily diacritized text)
+        quran_diacritics = r'[بَادَتِی|سَیَدۡخُلُونَ|جَهَنَّمَ|دَاخِرِینَ]'
+        
+        is_quranic = (
+            re.search(quran_verse_pattern, text, re.IGNORECASE) or
+            re.search(quran_markers, text) or
+            re.search(quran_diacritics, text)
+        )
+        
+        if is_quranic:
+            print(f"⚠ Skipping chunk {i} - contains Quranic content (to avoid misuse)")
+            continue
+        
         # Skip chunks with obviously corrupted text
         if text:
             # Count single character words (likely OCR corruption)
@@ -745,18 +765,25 @@ class RAGQAPipeline:
                 
                 # Tokenize prompt
                 prompt_tokens = tokenizer.encode(prompt, return_tensors="pt")
-                # Move to device if needed (model.generate will handle device_map="auto" automatically)
+                # CRITICAL: Always move tokens to the same device as the model
+                # Even with device_map="auto", input_ids must be on the correct device
                 if self.device != "cpu":
-                    # Try to move to device, but if using device_map="auto", model.generate handles it
-                    if not self._using_device_map_auto:
-                        prompt_tokens = prompt_tokens.to(self.device)
+                    # Get the device of the model's first parameter
+                    model_device = next(model.parameters()).device
+                    prompt_tokens = prompt_tokens.to(model_device)
+                else:
+                    prompt_tokens = prompt_tokens.to(self.device)
                 input_length = prompt_tokens.shape[1]
                 
                 # Generate using model directly (gives us only new tokens)
                 with torch.no_grad():
+                    # Calculate minimum length to ensure substantial answers
+                    min_length = input_length + max(50, int(self.max_new_tokens * 0.4))  # At least 40% of max, minimum 50 tokens
+                    
                     generated_tokens = model.generate(
                         prompt_tokens,
                         max_new_tokens=self.max_new_tokens,
+                        min_length=min_length,  # Ensure minimum total length (input + output)
                         num_return_sequences=1,
                         do_sample=True,
                         temperature=0.8,  # Increased from 0.7 for more diversity
@@ -764,6 +791,7 @@ class RAGQAPipeline:
                         repetition_penalty=1.1,  # Prevent repetition
                         pad_token_id=tokenizer.eos_token_id,
                         eos_token_id=tokenizer.eos_token_id,
+                        no_repeat_ngram_size=3,  # Prevent repetitive phrases
                     )
                 
                 # Extract only the generated tokens (skip input prompt tokens)
