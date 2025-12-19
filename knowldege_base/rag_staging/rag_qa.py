@@ -157,29 +157,6 @@ def _build_context_from_chunks(chunks: List[Dict], max_chars: int = 4000) -> str
                         text = text[len(prefix):].strip()
                     break
         
-        # CRITICAL: Filter out Quranic content to avoid misuse
-        # VERY CONSERVATIVE: Only filter if it's clearly a Quranic verse with verse numbers
-        import re
-        # Pattern 1: Verse markers with numbers like [غافر ٦٠], [البقرة ٢٥٥], etc.
-        # Must have both surah name AND verse number
-        quran_verse_with_number = r'\[[^\]]*(?:غافر|البقرة|النساء|المائدة|الأنعام|الأعراف|التوبة|يونس|هود|يوسف|إبراهيم|النحل|مريم|طه|الأنبياء|الحج|النور|الفرقان|الشعراء|النمل|القصص|العنكبوت|الروم|لقمان|السجدة|الأحزاب|سبأ|فاطر|يس|الصافات|ص|الزمر|فصلت|الشورى|الزخرف|الدخان|الجاثية|الأحقاف|محمد|الفتح|الحجرات|ق|الذاريات|الطور|النجم|القمر|الرحمن|الواقعة|الحديد|المجادلة|الحشر|الممتحنة|الصف|الجمعة|المنافقون|التغابن|الطلاق|التحريم|الملك|القلم|الحاقة|المعارج|نوح|الجن|المزمل|المدثر|القيامة|الإنسان|المرسلات|النبأ|النازعات|عبس|التكوير|الانفطار|المطففين|الانشقاق|البروج|الطارق|الأعلى|الغاشية|الفجر|البلد|الشمس|الليل|الضحى|الشرح|التين|العلق|القدر|البينة|الزلزلة|العاديات|القارعة|التكاثر|العصر|الهمزة|الفيل|قريش|الماعون|الكوثر|الكافرون|النصر|المسد|الإخلاص|الفلق|الناس)[^\]]*[٠-٩0-9]+[^\]]*\]'
-        # Pattern 2: Quranic verse markers ﴾ and ﴿ together (both must be present)
-        quran_markers_both = r'[﴾].*[﴿]'
-        # Pattern 3: Specific complete Quranic phrases (very specific)
-        complete_quranic_phrase = r'بَادَتِی.*سَیَدۡخُلُونَ.*جَهَنَّمَ.*دَاخِرِینَ.*[﴾]'
-        
-        # VERY CONSERVATIVE: Only filter if it's clearly a Quranic verse
-        # Must have verse marker with number, OR both markers, OR complete phrase with marker
-        is_quranic = (
-            re.search(quran_verse_with_number, text, re.IGNORECASE) or
-            re.search(quran_markers_both, text) or
-            re.search(complete_quranic_phrase, text)
-        )
-        
-        if is_quranic:
-            print(f"⚠ Skipping chunk {i} - contains Quranic verse (to avoid misuse)")
-            continue
-        
         # Skip chunks with obviously corrupted text
         if text:
             # Count single character words (likely OCR corruption)
@@ -235,13 +212,18 @@ def _build_prompt_ar(query: str, context: str, tokenizer=None, use_chat_template
         "- قدّم تفسيرا نفسيا مبسطا ومهنيّا قدر الإمكان.\n"
         "- إذا كان هناك أي احتمال لخطورة (مثل إيذاء النفس أو الآخرين)، شجّع السائل بقوة على طلب المساعدة الفورية من مختص أو جهة طوارئ في بلده.\n"
         "- لا تذكر أسماء أدوية ولا تقدّم تشخيصا طبيا قاطعا، بل ركّز على التوجيه والدعم العام.\n"
-        "- استعن بالمعلومات الواردة في 'السياق المتاح' لتوفير إجابة دقيقة ومدعومة بالحقائق."
+        "- استعن بالمعلومات الواردة في 'السياق المتاح' لتوفير إجابة دقيقة ومدعومة بالحقائق.\n"
+        "- **مهم جداً**: استخدم اللغة العربية فقط في إجابتك. لا تستخدم أي نصوص قرآنية أو آيات قرآنية.\n"
+        "- **مهم جداً**: إذا كان السياق يحتوي على نصوص دينية أو قرآنية، تجاهلها وركز على المعلومات الطبية والنفسية فقط."
     )
 
     user_instruction = (
         f"الاستشارة: {query}\n\n"
         f"السياق المتاح (معلومات طبية للاستعانة بها):\n{context}\n\n"
-        f"قم بكتابة الرد الطبي على هذه الاستشارة:"
+        f"قم بكتابة الرد الطبي على هذه الاستشارة:\n"
+        f"- استخدم اللغة العربية فقط\n"
+        f"- لا تنسخ أو تستشهد بأي نصوص قرآنية أو آيات\n"
+        f"- ركز على المعلومات الطبية والنفسية من السياق فقط"
     )
 
     # Try chat template for Qwen/Saka models
@@ -778,31 +760,49 @@ class RAGQAPipeline:
                     prompt_tokens = prompt_tokens.to(self.device)
                 input_length = prompt_tokens.shape[1]
                 
-                # Generate using model directly (gives us only new tokens)
-                with torch.no_grad():
-                    # Calculate minimum length to ensure substantial answers
-                    min_length = input_length + max(50, int(self.max_new_tokens * 0.4))  # At least 40% of max, minimum 50 tokens
+                # Use pipeline's generate method (more reliable - handles formatting correctly)
+                # The pipeline method is simpler and handles all edge cases
+                gen_outputs = self.generator(
+                    prompt,
+                    max_new_tokens=self.max_new_tokens,
+                    num_return_sequences=1,
+                    do_sample=True,
+                    temperature=0.8,
+                    top_p=0.95,
+                    repetition_penalty=1.1,
+                    pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
+                )
+                
+                # Extract answer from pipeline output
+                full_text = gen_outputs[0]["generated_text"]
+                
+                # Extract only the new part (remove prompt)
+                if prompt in full_text:
+                    answer_text = full_text[len(prompt):].strip()
+                else:
+                    # If prompt not found, try to find where answer starts
+                    # Look for common Arabic answer markers
+                    answer_markers = ["الإجابة:", "الرد:", "الجواب:", "بناءً على", "الاستشارة:"]
+                    answer_text = full_text
+                    for marker in answer_markers:
+                        if marker in full_text:
+                            parts = full_text.split(marker, 1)
+                            if len(parts) > 1:
+                                answer_text = parts[1].strip()
+                                break
                     
-                    generated_tokens = model.generate(
-                        prompt_tokens,
-                        max_new_tokens=self.max_new_tokens,
-                        min_length=min_length,  # Ensure minimum total length (input + output)
-                        num_return_sequences=1,
-                        do_sample=True,
-                        temperature=0.8,  # Increased from 0.7 for more diversity
-                        top_p=0.95,  # Increased from 0.9 for better coverage
-                        repetition_penalty=1.1,  # Prevent repetition
-                        pad_token_id=tokenizer.eos_token_id,
-                        eos_token_id=tokenizer.eos_token_id,
-                        no_repeat_ngram_size=3,  # Prevent repetitive phrases
-                    )
+                    # If still no good extraction, use everything after first 100 chars (skip prompt)
+                    if len(answer_text) == len(full_text) and len(full_text) > 100:
+                        answer_text = full_text[100:].strip()
                 
-                # Extract only the generated tokens (skip input prompt tokens)
-                new_tokens = generated_tokens[0][input_length:]
-                answer_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-                
-                # Also get full text for debugging
-                full_text = tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
+                # If answer is mostly punctuation, something went wrong - use extractive fallback
+                if len(answer_text) > 0:
+                    non_punct = sum(1 for c in answer_text if c.isalnum() or c.isspace())
+                    if non_punct < len(answer_text) * 0.1:  # Less than 10% non-punctuation
+                        print(f"   [DEBUG] Answer is mostly punctuation ({len(answer_text)} chars, {non_punct} non-punct)")
+                        print(f"   [DEBUG] Full text preview: {full_text[:500]}...")
+                        print(f"   [DEBUG] Using extractive fallback...")
+                        answer_text = _extract_fallback_answer(query, chunks)
                 
                 # Additional cleanup for garbled text detection
                 # Check if output looks like garbage (too many single characters, repeated patterns)
