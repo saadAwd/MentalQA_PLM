@@ -158,20 +158,19 @@ def _build_context_from_chunks(chunks: List[Dict], max_chars: int = 4000) -> str
                     break
         
         # CRITICAL: Filter out Quranic content to avoid misuse
-        # Check for Quranic verse markers and common patterns
+        # Only filter if it's clearly a Quranic verse, not just diacritics
         import re
-        # Pattern 1: Verse markers like [غافر ٦٠], [البقرة ٢٥٥], etc.
+        # Pattern 1: Verse markers like [غافر ٦٠], [البقرة ٢٥٥], etc. (MUST have verse marker)
         quran_verse_pattern = r'\[[^\]]*(?:غافر|البقرة|النساء|المائدة|الأنعام|الأعراف|التوبة|يونس|هود|يوسف|إبراهيم|النحل|مريم|طه|الأنبياء|الحج|النور|الفرقان|الشعراء|النمل|القصص|العنكبوت|الروم|لقمان|السجدة|الأحزاب|سبأ|فاطر|يس|الصافات|ص|الزمر|فصلت|الشورى|الزخرف|الدخان|الجاثية|الأحقاف|محمد|الفتح|الحجرات|ق|الذاريات|الطور|النجم|القمر|الرحمن|الواقعة|الحديد|المجادلة|الحشر|الممتحنة|الصف|الجمعة|المنافقون|التغابن|الطلاق|التحريم|الملك|القلم|الحاقة|المعارج|نوح|الجن|المزمل|المدثر|القيامة|الإنسان|المرسلات|النبأ|النازعات|عبس|التكوير|الانفطار|المطففين|الانشقاق|البروج|الطارق|الأعلى|الغاشية|الفجر|البلد|الشمس|الليل|الضحى|الشرح|التين|العلق|القدر|البينة|الزلزلة|العاديات|القارعة|التكاثر|العصر|الهمزة|الفيل|قريش|الماعون|الكوثر|الكافرون|النصر|المسد|الإخلاص|الفلق|الناس)[^\]]*\]'
-        # Pattern 2: Quranic verse markers ﴾ and ﴿
+        # Pattern 2: Quranic verse markers ﴾ and ﴿ (only if they appear together or with verse numbers)
         quran_markers = r'[﴾﴿]'
-        # Pattern 3: Common Quranic diacritics patterns (heavily diacritized text)
-        quran_diacritics = r'[بَادَتِی|سَیَدۡخُلُونَ|جَهَنَّمَ|دَاخِرِینَ]'
+        # Pattern 3: Specific Quranic phrases (not just diacritics) - only filter if verse marker also present
+        # Only filter if BOTH verse marker AND diacritics are present (more specific)
+        has_verse_marker = re.search(quran_verse_pattern, text, re.IGNORECASE) or re.search(quran_markers, text)
+        has_quranic_phrase = re.search(r'بَادَتِی.*سَیَدۡخُلُونَ.*جَهَنَّمَ.*دَاخِرِینَ', text) or re.search(r'جَهَنَّمَ.*دَاخِرِینَ', text)
         
-        is_quranic = (
-            re.search(quran_verse_pattern, text, re.IGNORECASE) or
-            re.search(quran_markers, text) or
-            re.search(quran_diacritics, text)
-        )
+        # Only filter if it's clearly a Quranic verse (has marker AND phrase, or just markers)
+        is_quranic = has_verse_marker or (has_verse_marker and has_quranic_phrase)
         
         if is_quranic:
             print(f"⚠ Skipping chunk {i} - contains Quranic content (to avoid misuse)")
@@ -833,6 +832,13 @@ class RAGQAPipeline:
             answer_text = answer_text.replace("<extra_id_0>", "").replace("<extra_id_1>", "")
             answer_text = answer_text.replace("<|im_start|>", "").replace("<|im_end|>", "")
             answer_text = answer_text.replace("<|endoftext|>", "")
+            
+            # Remove mixed-language content (non-Arabic/Latin characters)
+            import re
+            # Remove Chinese, Japanese, Korean, and other non-Arabic/Latin characters
+            # Keep Arabic, Latin, numbers, punctuation, and common symbols
+            answer_text = re.sub(r'[^\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0020-\u007E\u00A0-\u00FF\u0100-\u017F\u2000-\u206F\u20A0-\u20CF\u2100-\u214F]', '', answer_text)
+            
             answer_text = answer_text.strip()
             
             # Debug: Print first 200 chars of generated text to diagnose issues
