@@ -29,12 +29,30 @@ PROCESSED_DIR = os.path.join(KNOWLEDGE_BASE_ROOT, "data", "processed")
 
 def _iter_jsonl(path: str) -> Iterable[Dict]:
     """Yield JSON objects line-by-line from a JSONL file."""
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            yield json.loads(line)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError as e:
+                    print(f"  [WARNING] Skipping invalid JSON at line {line_num} in {path}: {e}")
+                    continue
+    except UnicodeDecodeError as e:
+        # Try with error handling
+        print(f"  [WARNING] UTF-8 decode error in {path}, trying with error handling...")
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError as e2:
+                    print(f"  [WARNING] Skipping invalid JSON at line {line_num} in {path}: {e2}")
+                    continue
 
 
 def load_articles(
@@ -98,43 +116,55 @@ def load_all_documents(
 
     # Load Articles
     if os.path.exists(articles_path):
-        for obj in _iter_jsonl(articles_path):
-            obj = dict(obj)
-            obj.setdefault("kb_family", "article")
-            docs.append(obj)
+        try:
+            for obj in _iter_jsonl(articles_path):
+                obj = dict(obj)
+                obj.setdefault("kb_family", "article")
+                docs.append(obj)
+        except Exception as e:
+            print(f"  [ERROR] Failed to load articles from {articles_path}: {e}")
+            print(f"  [ERROR] Skipping articles file. Check encoding and file format.")
     else:
         print(f"Warning: Articles file not found: {articles_path}")
 
     # Load Books
     if os.path.exists(books_path):
-        for obj in _iter_jsonl(books_path):
-            obj = dict(obj)
-            obj.setdefault("kb_family", "book")
-            docs.append(obj)
+        try:
+            for obj in _iter_jsonl(books_path):
+                obj = dict(obj)
+                obj.setdefault("kb_family", "book")
+                docs.append(obj)
+        except Exception as e:
+            print(f"  [ERROR] Failed to load books from {books_path}: {e}")
+            print(f"  [ERROR] Skipping books file. Check encoding and file format.")
     else:
         print(f"Warning: Books file not found: {books_path}")
 
     # Load QA Pairs (Shifaa)
     if os.path.exists(qa_path):
-        for idx, obj in enumerate(_iter_jsonl(qa_path)):
-            obj = dict(obj)
-            obj.setdefault("kb_family", "qa_pair")
-            
-            # Prepare for chunking: use ANSWER as primary content (for retrieval)
-            # Store question separately for metadata, but answer is what we want to retrieve
-            if "clean_text" not in obj:
-                a = obj.get("answer", "")
-                q = obj.get("question", "")
-                # Answer is primary - this is what we want to retrieve and use
-                obj["clean_text"] = a
-                # Store question as title for better retrieval context
-                if not obj.get("title"):
-                    obj["title"] = q[:200] if q else ""
-            
-            # Use a consistent, unique doc_id based on index to avoid duplicates
-            obj["doc_id"] = f"shifaa_qa_{idx}"
+        try:
+            for idx, obj in enumerate(_iter_jsonl(qa_path)):
+                obj = dict(obj)
+                obj.setdefault("kb_family", "qa_pair")
                 
-            docs.append(obj)
+                # Prepare for chunking: use ANSWER as primary content (for retrieval)
+                # Store question separately for metadata, but answer is what we want to retrieve
+                if "clean_text" not in obj:
+                    a = obj.get("answer", "")
+                    q = obj.get("question", "")
+                    # Answer is primary - this is what we want to retrieve and use
+                    obj["clean_text"] = a
+                    # Store question as title for better retrieval context
+                    if not obj.get("title"):
+                        obj["title"] = q[:200] if q else ""
+                
+                # Use a consistent, unique doc_id based on index to avoid duplicates
+                obj["doc_id"] = f"shifaa_qa_{idx}"
+                    
+                docs.append(obj)
+        except Exception as e:
+            print(f"  [ERROR] Failed to load QA pairs from {qa_path}: {e}")
+            print(f"  [ERROR] Skipping QA pairs file. Check encoding and file format.")
     else:
         print(f"Note: QA pairs file not found at {qa_path}, skipping.")
 
