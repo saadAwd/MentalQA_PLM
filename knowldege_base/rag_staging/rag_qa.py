@@ -256,7 +256,6 @@ def _build_prompt_ar(query: str, context: str, tokenizer=None, use_chat_template
                 {"role": "user", "content": user_instruction}
             ]
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            print(f"   [DEBUG] Chat template applied, prompt length: {len(prompt)}")
             return prompt
         except Exception as e:
             print(f"⚠ Chat template failed ({e}), using simple format")
@@ -791,89 +790,23 @@ class RAGQAPipeline:
                     prompt_tokens = prompt_tokens.to(self.device)
                 input_length = prompt_tokens.shape[1]
                 
-                # Use direct model.generate() for better control and debugging
-                # This gives us more control over the generation process
-                attention_mask = torch.ones_like(prompt_tokens)
-                pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+                # Simple pipeline generation - the original working approach
+                gen_outputs = self.generator(
+                    prompt,
+                    max_new_tokens=self.max_new_tokens,
+                    num_return_sequences=1,
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.9,
+                    pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
+                )
                 
-                # Debug: Print prompt preview
-                print(f"   [DEBUG] Prompt length: {len(prompt)} chars")
-                print(f"   [DEBUG] Prompt preview (last 300 chars): {prompt[-300:]}")
-                print(f"   [DEBUG] Using chat template: {self.has_chat_template}")
-                
-                with torch.no_grad():
-                    generated_tokens = model.generate(
-                        prompt_tokens,
-                        attention_mask=attention_mask,
-                        max_new_tokens=self.max_new_tokens,
-                        min_length=input_length + 50,  # Ensure minimum length
-                        num_return_sequences=1,
-                        do_sample=True,
-                        temperature=0.7,  # Slightly lower for more focused output
-                        top_p=0.9,
-                        repetition_penalty=1.1,
-                        pad_token_id=pad_token_id,
-                        eos_token_id=tokenizer.eos_token_id,
-                        no_repeat_ngram_size=3,
-                    )
-                
-                # Decode the full sequence
-                full_decoded = tokenizer.decode(generated_tokens[0], skip_special_tokens=True)
-                
-                # Debug: Print full decoded text
-                print(f"   [DEBUG] Full decoded length: {len(full_decoded)} chars")
-                print(f"   [DEBUG] Full decoded (first 500 chars): {full_decoded[:500]}")
-                print(f"   [DEBUG] Full decoded (last 500 chars): {full_decoded[-500:]}")
-                
-                # Extract only the new tokens (skip input prompt)
-                new_tokens = generated_tokens[0][input_length:]
-                answer_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-                
-                # If answer extraction failed or is too short, try alternative methods
-                if len(answer_text) < 20:
-                    print(f"   [DEBUG] Extracted answer too short ({len(answer_text)} chars), trying alternative extraction...")
-                    # Try to find answer after common markers
-                    answer_markers = ["الإجابة:", "الرد:", "الجواب:", "بناءً على"]
-                    for marker in answer_markers:
-                        if marker in full_decoded:
-                            parts = full_decoded.split(marker, 1)
-                            if len(parts) > 1:
-                                potential_answer = parts[1].strip()
-                                if len(potential_answer) > len(answer_text):
-                                    answer_text = potential_answer
-                                    break
-                    
-                    # If still short, try removing prompt from full text
-                    if len(answer_text) < 20 and prompt in full_decoded:
-                        answer_text = full_decoded.split(prompt, 1)[-1].strip()
-                    
-                    # Last resort: use everything after input_length chars
-                    if len(answer_text) < 20:
-                        answer_text = full_decoded[max(input_length, len(full_decoded) - 1000):].strip()
-                
-                # If answer is mostly punctuation, something went wrong - use extractive fallback
-                if len(answer_text) > 0:
-                    non_punct = sum(1 for c in answer_text if c.isalnum() or c.isspace())
-                    if non_punct < len(answer_text) * 0.1:  # Less than 10% non-punctuation
-                        print(f"   [DEBUG] Answer is mostly punctuation ({len(answer_text)} chars, {non_punct} non-punct)")
-                        print(f"   [DEBUG] Full text preview: {full_text[:500]}...")
-                        print(f"   [DEBUG] Using extractive fallback...")
-                        answer_text = _extract_fallback_answer(query, chunks)
-                
-                # Additional cleanup for garbled text detection
-                # Check if output looks like garbage (too many single characters, repeated patterns)
-                if len(answer_text) > 20:
-                    # Count single character words (likely garbage)
-                    words = answer_text.split()
-                    single_char_words = sum(1 for w in words if len(w) == 1 and w.isalpha())
-                    if len(words) > 5 and single_char_words > len(words) * 0.4:  # More than 40% single char words
-                        print("⚠ Generated text appears garbled, using extractive fallback...")
-                        answer_text = _extract_fallback_answer(query, chunks)
-                    # Also check if answer is too similar to source chunks (likely copying)
-                    elif any(chunk.get("text", "")[:100] in answer_text[:200] for chunk in chunks):
-                        print("⚠ Answer appears to be copied from source, trying to improve...")
-                        # Try to extract a better answer
-                        answer_text = _extract_fallback_answer(query, chunks)
+                # Simple extraction: remove prompt from generated text
+                full_text = gen_outputs[0]["generated_text"]
+                if prompt in full_text:
+                    answer_text = full_text[len(prompt):].strip()
+                else:
+                    answer_text = full_text.strip()
                 
                 print("✓ Answer generated successfully")
             else:
@@ -888,34 +821,15 @@ class RAGQAPipeline:
                 )
                 answer_text = gen_outputs[0]["generated_text"].strip()
             
-            # Clean up any special tokens that might appear
+            # Clean up special tokens
             answer_text = answer_text.replace("<extra_id_0>", "").replace("<extra_id_1>", "")
             answer_text = answer_text.replace("<|im_start|>", "").replace("<|im_end|>", "")
             answer_text = answer_text.replace("<|endoftext|>", "")
-            
-            # Remove mixed-language content (non-Arabic/Latin characters)
-            import re
-            # Remove Chinese, Japanese, Korean characters (CJK Unified Ideographs)
-            # Keep Arabic, Latin, numbers, punctuation, and common symbols
-            # Remove: \u4E00-\u9FFF (CJK), \u3400-\u4DBF (CJK Extension A), etc.
-            answer_text = re.sub(r'[\u4E00-\u9FFF\u3400-\u4DBF\u20000-\u2A6DF\u2A700-\u2B73F\u2B740-\u2B81F\u2B820-\u2CEAF]', '', answer_text)
-            
             answer_text = answer_text.strip()
             
-            # Debug: Print first 200 chars of generated text to diagnose issues
-            if len(answer_text) < 50:
-                print(f"   [DEBUG] Generated text (first 200 chars): {full_text[:200]}")
-                print(f"   [DEBUG] Extracted answer length: {len(answer_text)}")
-            
-            # Check if generation actually produced meaningful content
-            # Relaxed threshold: minimum 20 characters (was 10) to allow for short but valid answers
-            # Also check if it's just special tokens or punctuation
-            is_just_punctuation = answer_text.strip() in [".", "،", "؟", "!", ":", ";", ","]
-            is_too_short = len(answer_text) < 20
-            is_only_special_tokens = len(answer_text.replace(" ", "").replace("\n", "")) < 10
-            
-            if not answer_text or is_too_short or is_just_punctuation or is_only_special_tokens:
-                print(f"⚠ Generation produced empty/short output (len={len(answer_text)}), using extractive fallback...")
+            # Simple validation: if too short, use fallback
+            if not answer_text or len(answer_text) < 20:
+                print(f"⚠ Generation produced short/empty output (len={len(answer_text)}), using extractive fallback...")
                 answer_text = _extract_fallback_answer(query, chunks)
         except Exception as e:
             print(f"⚠ Generation failed ({e}), using extractive fallback...")
