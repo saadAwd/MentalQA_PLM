@@ -108,6 +108,21 @@ class SparseKBIndex:
         )[:top_k]
 
         return [(self.chunks[i], float(scores[i])) for i in top_indices]
+    
+    def get_stats(self) -> Dict:
+        """Get statistics about the sparse index."""
+        kb_families = set()
+        doc_ids = set()
+        for chunk in self.chunks:
+            kb_families.add(chunk.get("kb_family", "unknown"))
+            doc_ids.add(chunk.get("doc_id", "unknown"))
+        
+        return {
+            "total_chunks": len(self.chunks),
+            "kb_families": len(kb_families),
+            "total_docs": len(doc_ids),
+            "index_type": "BM25"
+        }
 
 
 def main() -> None:
@@ -132,6 +147,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 

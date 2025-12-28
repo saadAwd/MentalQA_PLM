@@ -136,26 +136,8 @@ def _build_context_from_chunks(chunks: List[Dict], max_chars: int = 4000) -> str
         title = ch.get("title") or ""
         text = ch.get("text") or ""
         
-        # CRITICAL FIX: For QA pairs, extract only the ANSWER part
-        # Remove question prefixes that might confuse the generator
-        if ch.get("kb_family") == "qa_pair" or ch.get("content_type") == "qa_pair":
-            # Remove common question prefixes
-            question_prefixes = [
-                "السؤال:",
-                "السؤال",
-                "الاستشارة:",
-                "الاستشارة",
-            ]
-            for prefix in question_prefixes:
-                if text.startswith(prefix):
-                    # Find where the answer starts (usually after "الإجابة:" or newline)
-                    parts = text.split("الإجابة:", 1)
-                    if len(parts) > 1:
-                        text = parts[1].strip()
-                    else:
-                        # If no "الإجابة:" marker, remove the question prefix and take rest
-                        text = text[len(prefix):].strip()
-                    break
+        # For QA pairs, text already contains only the answer (question is in title)
+        # No need to filter - the loader already separated them
         
         # Skip chunks with obviously corrupted text
         if text:

@@ -61,7 +61,7 @@ def retry_on_failure(max_attempts=MAX_RETRIES, delay=RETRY_DELAY, backoff=RETRY_
                         attempts += 1
                         continue
                     elif e.response.status_code == 404:
-                        print("  ✗ 404 Not Found")
+                        print("  [ERROR] 404 Not Found")
                         return None
                     elif attempts < max_attempts - 1:
                         wait_time = delay * (backoff ** attempts)
@@ -142,11 +142,11 @@ def get_article_links(page_num):
             links_set.add(full_url)
 
         links = sorted(list(links_set))  # Convert to sorted list
-        print(f"  ✓ Found {len(links)} unique article link(s) on page {page_num}")
+        print(f"  [OK] Found {len(links)} unique article link(s) on page {page_num}")
         return links
 
     except Exception as e:
-        print(f"  ✗ Error fetching article list page {page_num}: {e}")
+        print(f"  [ERROR] Error fetching article list page {page_num}: {e}")
         return []
 
 
@@ -246,7 +246,7 @@ def parse_article(url):
 
         if body_text:
             print(
-                f"  ✓ Extracted: title={bool(title)}, text_length={len(body_text)} chars"
+                f"  [OK] Extracted: title={bool(title)}, text_length={len(body_text)} chars"
             )
         else:
             print("  ⚠ No text content extracted")
@@ -254,7 +254,7 @@ def parse_article(url):
         return doc
 
     except Exception as e:
-        print(f"  ✗ Error parsing article {url}: {e}")
+        print(f"  [ERROR] Error parsing article {url}: {e}")
         return None
 
 
@@ -296,7 +296,7 @@ def main():
     # Load checkpoint (shared with POC scraper)
     completed_urls = load_checkpoint()
     if completed_urls:
-        print(f"\n✓ Found checkpoint: {len(completed_urls)} already scraped article(s)")
+        print(f"\n[OK] Found checkpoint: {len(completed_urls)} already scraped article(s)")
 
     # Collect article URLs from all pages
     all_article_urls = set()
@@ -306,7 +306,7 @@ def main():
         time.sleep(REQUEST_DELAY)
 
     if not all_article_urls:
-        print("\n✗ No article URLs found on any page.")
+        print("\n[ERROR] No article URLs found on any page.")
         return
 
     print(f"\nTotal unique article URLs across all pages: {len(all_article_urls)}")
@@ -316,7 +316,7 @@ def main():
     if new_urls:
         print(f"\nScraping {len(new_urls)} new article(s)...")
     else:
-        print("\n✓ All articles already scraped according to checkpoint!")
+        print("\n[OK] All articles already scraped according to checkpoint!")
         return
 
     # Scrape articles
@@ -335,7 +335,7 @@ def main():
                 success_count += 1
             else:
                 fail_count += 1
-                print("  ✗ Skipping article (no content extracted)")
+                print("  [ERROR] Skipping article (no content extracted)")
 
             # Rate limiting
             time.sleep(REQUEST_DELAY)
@@ -347,8 +347,8 @@ def main():
     print(f"\n{'=' * 60}")
     print("SCRAPING COMPLETE")
     print(f"{'=' * 60}")
-    print(f"✓ Successfully scraped: {success_count} article(s)")
-    print(f"✗ Failed: {fail_count} article(s)")
+    print(f"[OK] Successfully scraped: {success_count} article(s)")
+    print(f"[ERROR] Failed: {fail_count} article(s)")
     print(f"📄 Output saved to: {output_path}")
     print(f"💾 Checkpoint saved: {len(completed_urls)} total article(s)")
 

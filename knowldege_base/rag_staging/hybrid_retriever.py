@@ -201,6 +201,7 @@ class HybridKBRetriever:
                 {
                     "chunk": chunk,
                     "score_hybrid": float(score_hybrid),
+                    "score_hybrid_original": float(score_hybrid),  # Preserve original hybrid score
                     "score_sparse": float(s_sparse_norm),
                     "score_dense": float(s_dense_norm),
                     "score_raw_dense": float(score_raw_dense),
@@ -209,27 +210,68 @@ class HybridKBRetriever:
 
         # Sort by hybrid score
         initial_results.sort(key=lambda r: r["score_hybrid"], reverse=True)
-        candidates = initial_results[:retrieve_k]
+        
+        # Deduplicate by content (keep first occurrence with highest score)
+        seen_texts = {}
+        deduplicated = []
+        for result in initial_results:
+            chunk_text = result["chunk"].get("text", result["chunk"].get("clean_text", ""))
+            # Normalize text for comparison (remove extra whitespace)
+            text_key = " ".join(chunk_text.split())
+            
+            if text_key not in seen_texts:
+                seen_texts[text_key] = result
+                deduplicated.append(result)
+            else:
+                # Keep the one with higher hybrid score
+                existing = seen_texts[text_key]
+                if result["score_hybrid"] > existing["score_hybrid"]:
+                    # Replace with better scoring duplicate
+                    deduplicated.remove(existing)
+                    seen_texts[text_key] = result
+                    deduplicated.append(result)
+        
+        candidates = deduplicated[:retrieve_k]
 
         # 2. Re-ranking
         if rerank and self.rerank_model and candidates:
             # Prepare pairs for re-ranking
-            sentence_pairs = [[query, c["chunk"]["text"]] for c in candidates]
+            sentence_pairs = [[query, c["chunk"].get("text", c["chunk"].get("clean_text", ""))] for c in candidates]
             
             # Compute cross-encoder scores (logits for BGE)
-            rerank_scores = self.rerank_model.predict(sentence_pairs)
-            
-            # Update scores
-            for i, score in enumerate(rerank_scores):
-                candidates[i]["score_rerank"] = float(score)
-                # BGE scores are logits. We'll map them to a 0-1 range for the threshold
-                # Simple sigmoid mapping: 1 / (1 + exp(-x))
-                norm_score = 1.0 / (1.0 + np.exp(-float(score)))
-                candidates[i]["score_hybrid"] = norm_score
+            try:
+                rerank_scores = self.rerank_model.predict(sentence_pairs)
+                
+                # Debug: Check rerank scores
+                if not hasattr(self, "_debug_rerank"):
+                    print(f"[DEBUG] Reranking {len(candidates)} candidates")
+                    print(f"[DEBUG] Sample rerank scores (raw): {[f'{s:.4f}' for s in rerank_scores[:3]]}")
+                    self._debug_rerank = True
+                
+                # Update scores
+                for i, score in enumerate(rerank_scores):
+                    candidates[i]["score_rerank"] = float(score)
+                    # BGE scores are logits. We'll map them to a 0-1 range for the threshold
+                    # Simple sigmoid mapping: 1 / (1 + exp(-x))
+                    norm_score = 1.0 / (1.0 + np.exp(-float(score)))
+                    # Keep original hybrid score, use rerank score for final ranking
+                    # Store normalized rerank score separately
+                    candidates[i]["score_rerank_norm"] = norm_score
+                    # For final ranking, we'll use rerank score, but keep original hybrid for display
 
-            # Sort by raw rerank score
-            candidates.sort(key=lambda x: x.get("score_rerank", -1e9), reverse=True)
-            return candidates[:final_k]
+                # Sort by raw rerank score (highest first)
+                candidates.sort(key=lambda x: x.get("score_rerank", -1e9), reverse=True)
+            except Exception as e:
+                import traceback
+                print(f"[WARNING] Reranking failed: {e}")
+                print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+                print(f"[INFO] Returning results without reranking")
+                # Keep original hybrid scores if reranking fails
+        elif rerank and not self.rerank_model:
+            if not hasattr(self, "_warned_no_rerank"):
+                print(f"[WARNING] Reranking requested but rerank_model is None")
+                print(f"[INFO] Check if USE_RERANKING is enabled and model loaded correctly")
+                self._warned_no_rerank = True
 
         return candidates[:final_k]
 

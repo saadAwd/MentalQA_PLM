@@ -174,19 +174,35 @@ def iter_document_chunks(
         kb_family = doc.get("kb_family") or doc.get("content_type") or "unknown"
         content_type = doc.get("content_type", kb_family)
         
-        # Pick sizes based on content type
-        chunk_size, chunk_overlap = config_map.get(content_type, (max_chars, overlap_chars))
-        
-        # Override with function args if provided
-        if content_type == "article":
-            chunk_size = article_max_chars if article_max_chars is not None else chunk_size
-            chunk_overlap = article_overlap_chars if article_overlap_chars is not None else chunk_overlap
-
-        # Choose chunking algorithm
-        if use_sentence_chunking:
-            chunks = sentence_aware_chunk(clean_text, max_chars=chunk_size, overlap_chars=chunk_overlap)
+        # Special handling for QA pairs: keep them as single chunks if possible
+        # QA answers should remain intact for better context
+        if content_type == "qa_pair":
+            # If the answer is reasonable length, keep it as one chunk
+            # Only split if it's extremely long (e.g., > 4000 chars)
+            if len(clean_text) <= 4000:
+                # Keep as single chunk - don't split QA pairs unnecessarily
+                chunks = [(0, len(clean_text), clean_text)]
+            else:
+                # Only split if really long
+                chunk_size, chunk_overlap = config_map.get(content_type, (max_chars, overlap_chars))
+                if use_sentence_chunking:
+                    chunks = sentence_aware_chunk(clean_text, max_chars=chunk_size, overlap_chars=chunk_overlap)
+                else:
+                    chunks = simple_overlap_chunk(clean_text, max_chars=chunk_size, overlap_chars=chunk_overlap)
         else:
-            chunks = simple_overlap_chunk(clean_text, max_chars=chunk_size, overlap_chars=chunk_overlap)
+            # Pick sizes based on content type for articles and books
+            chunk_size, chunk_overlap = config_map.get(content_type, (max_chars, overlap_chars))
+            
+            # Override with function args if provided
+            if content_type == "article":
+                chunk_size = article_max_chars if article_max_chars is not None else chunk_size
+                chunk_overlap = article_overlap_chars if article_overlap_chars is not None else chunk_overlap
+
+            # Choose chunking algorithm
+            if use_sentence_chunking:
+                chunks = sentence_aware_chunk(clean_text, max_chars=chunk_size, overlap_chars=chunk_overlap)
+            else:
+                chunks = simple_overlap_chunk(clean_text, max_chars=chunk_size, overlap_chars=chunk_overlap)
 
         num_chunks = len(chunks)
         for idx, (start, end, chunk_text) in enumerate(chunks):
@@ -239,6 +255,7 @@ def build_kb_chunks(
     num_chunks = 0
     article_chunks = 0
     book_chunks = 0
+    qa_chunks = 0
     
     # Track seen ids to avoid duplicate processing
     seen_doc_ids = set()
@@ -278,6 +295,8 @@ def build_kb_chunks(
                 num_chunks += 1
                 if kb_family == "article":
                     article_chunks += 1
+                elif kb_family == "qa_pair":
+                    qa_chunks += 1
                 else:
                     book_chunks += 1
                 f.write(json.dumps(chunk, ensure_ascii=False))
@@ -286,6 +305,8 @@ def build_kb_chunks(
     print(f"[OK] Built {num_chunks} chunks from {num_docs} documents.")
     print(f"  - Articles: {article_chunks} chunks")
     print(f"  - Books: {book_chunks} chunks")
+    if qa_chunks > 0:
+        print(f"  - QA Pairs: {qa_chunks} chunks")
     if duplicate_count > 0:
         print(f"  - Skipped {duplicate_count} duplicate chunks")
     print(f"  - Output: {out_path}")
