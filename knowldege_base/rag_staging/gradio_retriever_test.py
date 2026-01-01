@@ -14,11 +14,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple
+import sys
 
 import gradio as gr
 
 from .hybrid_retriever import HybridKBRetriever
 from .langchain_retriever import HybridKBRetrieverWrapper
+
+# Add project root to path for manual evaluation import
+project_root = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
+try:
+    from manual_evaluation import ManualEvaluator, create_manual_evaluation_tab
+except ImportError:
+    ManualEvaluator = None
+    create_manual_evaluation_tab = None
+    print("Warning: manual_evaluation module not found. Manual evaluation tab will not be available.")
 
 
 class RetrieverTester:
@@ -314,6 +325,335 @@ def create_gradio_interface():
             with gr.Tab("📊 Statistics"):
                 stats_md = gr.Markdown("### KB Statistics\n\nClick 'Get Stats' to load statistics.")
                 stats_btn = gr.Button("Get Stats")
+            
+            # Add Manual Evaluation tab if available
+            if ManualEvaluator is not None:
+                try:
+                    evaluator = ManualEvaluator(json_path=str(project_root / "retrieval_test_results.json"))
+                    with gr.Tab("📝 Manual Evaluation"):
+                        gr.Markdown("""
+                        # 📝 Manual Evaluation of Retrieval Results
+                        
+                        Evaluate the relevance of retrieved answers to questions.
+                        - **5**: Retrieved answer is directly relevant and provides a solution
+                        - **4**: Retrieved answer is mostly relevant with minor gaps
+                        - **3**: Retrieved answer is somewhat relevant but incomplete
+                        - **2**: Retrieved answer has limited relevance
+                        - **1**: Retrieved chunks are not relevant
+                        
+                        Your evaluations will be saved automatically when you click Save, Next, or Previous.
+                        """)
+                        
+                        with gr.Row():
+                            with gr.Column(scale=3):
+                                # Display area
+                                item_display = gr.HTML(label="Question & Answers")
+                                
+                                # Status
+                                status_text = gr.Textbox(
+                                    label="Status",
+                                    value=f"📄 Item 1 of {evaluator.get_total_count()}",
+                                    interactive=False
+                                )
+                                
+                                # Rating
+                                rating_slider = gr.Slider(
+                                    minimum=1,
+                                    maximum=5,
+                                    step=1,
+                                    value=None,
+                                    label="Relevance Rating (1-5)",
+                                    info="5 = Directly relevant with solution, 1 = Not relevant"
+                                )
+                                
+                                # Comment
+                                comment_box = gr.Textbox(
+                                    label="Comments (Optional)",
+                                    placeholder="Add any comments about this evaluation...",
+                                    lines=3
+                                )
+                                
+                                # Navigation buttons
+                                with gr.Row():
+                                    first_btn = gr.Button("⏮️ First", variant="secondary")
+                                    prev_btn = gr.Button("◀️ Previous", variant="secondary")
+                                    next_btn = gr.Button("Next ▶️", variant="secondary")
+                                    last_btn = gr.Button("Last ⏭️", variant="secondary")
+                                
+                                # Action buttons
+                                with gr.Row():
+                                    save_btn = gr.Button("💾 Save Evaluation", variant="primary")
+                                
+                                # Jump to index input
+                                with gr.Row():
+                                    jump_input = gr.Number(
+                                        label="Jump to Index (0-based)",
+                                        value=0,
+                                        minimum=0,
+                                        maximum=max(0, evaluator.get_total_count() - 1),
+                                        step=1
+                                    )
+                                    jump_btn = gr.Button("🔢 Jump", variant="secondary")
+                            
+                            with gr.Column(scale=1):
+                                # Statistics
+                                stats_md = gr.Markdown("### 📊 Statistics\n\nLoading...")
+                                
+                                # Fast access buttons
+                                fast_access_html = gr.HTML(label="Fast Access")
+                        
+                        # Hidden state to track current index
+                        current_index_state = gr.State(value=0)
+                        total_count_state = gr.State(value=evaluator.get_total_count())
+                        
+                        def load_item(index: int = None):
+                            """Load item at given index or current index."""
+                            if index is not None:
+                                evaluator.current_index = index
+                            item, status, idx, total, evaluated = evaluator.navigate("")
+                            
+                            # Format display
+                            display_html = evaluator.format_item_display(item)
+                            
+                            # Get current rating and comment
+                            current_rating = item.get('manual_rating') if item else None
+                            current_comment = item.get('manual_comment', '') if item else ''
+                            
+                            # Update stats
+                            evaluated_count = evaluator.get_evaluated_count()
+                            percentage = (evaluated_count/total*100) if total > 0 else 0
+                            stats_text = f"""
+                            ### 📊 Statistics
+                            
+                            - **Total Items**: {total}
+                            - **Evaluated**: {evaluated_count} ({percentage:.1f}%)
+                            - **Remaining**: {total - evaluated_count}
+                            - **Current Position**: {idx + 1} / {total}
+                            """
+                            
+                            # Fast access buttons
+                            fast_access = evaluator.create_fast_access_buttons(evaluated, total)
+                            
+                            return (
+                                display_html,
+                                status,
+                                current_rating,
+                                current_comment,
+                                stats_text,
+                                fast_access,
+                                idx,
+                                total
+                            )
+                        
+                        def save_and_next(rating, comment):
+                            """Save evaluation and move to next."""
+                            if rating is not None:
+                                evaluator.update_evaluation(int(rating), comment)
+                                evaluator.save_data()
+                            
+                            # Move to next
+                            item, status, idx, total, evaluated = evaluator.navigate("next")
+                            display_html = evaluator.format_item_display(item)
+                            current_rating = item.get('manual_rating') if item else None
+                            current_comment = item.get('manual_comment', '') if item else ''
+                            
+                            evaluated_count = evaluator.get_evaluated_count()
+                            percentage = (evaluated_count/total*100) if total > 0 else 0
+                            stats_text = f"""
+                            ### 📊 Statistics
+                            
+                            - **Total Items**: {total}
+                            - **Evaluated**: {evaluated_count} ({percentage:.1f}%)
+                            - **Remaining**: {total - evaluated_count}
+                            - **Current Position**: {idx + 1} / {total}
+                            """
+                            fast_access = evaluator.create_fast_access_buttons(evaluated, total)
+                            
+                            return (
+                                display_html,
+                                status,
+                                current_rating,
+                                current_comment,
+                                stats_text,
+                                fast_access,
+                                idx,
+                                total,
+                                "✅ Saved and moved to next!"
+                            )
+                        
+                        def save_evaluation(rating, comment):
+                            """Save evaluation without moving."""
+                            if rating is not None:
+                                evaluator.update_evaluation(int(rating), comment)
+                                return evaluator.save_data()
+                            return "⚠️ Please select a rating first"
+                        
+                        def navigate_with_save(direction, rating, comment):
+                            """Navigate to next/previous/first/last, saving current evaluation first."""
+                            # Save current evaluation before navigating
+                            if rating is not None:
+                                evaluator.update_evaluation(int(rating), comment)
+                                evaluator.save_data()
+                            
+                            item, status, idx, total, evaluated = evaluator.navigate(direction)
+                            display_html = evaluator.format_item_display(item)
+                            current_rating = item.get('manual_rating') if item else None
+                            current_comment = item.get('manual_comment', '') if item else ''
+                            
+                            evaluated_count = evaluator.get_evaluated_count()
+                            percentage = (evaluated_count/total*100) if total > 0 else 0
+                            stats_text = f"""
+                            ### 📊 Statistics
+                            
+                            - **Total Items**: {total}
+                            - **Evaluated**: {evaluated_count} ({percentage:.1f}%)
+                            - **Remaining**: {total - evaluated_count}
+                            - **Current Position**: {idx + 1} / {total}
+                            """
+                            fast_access = evaluator.create_fast_access_buttons(evaluated, total)
+                            
+                            return (
+                                display_html,
+                                status,
+                                current_rating,
+                                current_comment,
+                                stats_text,
+                                fast_access,
+                                idx,
+                                total
+                            )
+                        
+                        def jump_to(jump_idx):
+                            """Jump to specific index."""
+                            item, status, idx, total, evaluated = evaluator.jump_to_index(int(jump_idx))
+                            display_html = evaluator.format_item_display(item)
+                            current_rating = item.get('manual_rating') if item else None
+                            current_comment = item.get('manual_comment', '') if item else ''
+                            
+                            evaluated_count = evaluator.get_evaluated_count()
+                            percentage = (evaluated_count/total*100) if total > 0 else 0
+                            stats_text = f"""
+                            ### 📊 Statistics
+                            
+                            - **Total Items**: {total}
+                            - **Evaluated**: {evaluated_count} ({percentage:.1f}%)
+                            - **Remaining**: {total - evaluated_count}
+                            - **Current Position**: {idx + 1} / {total}
+                            """
+                            fast_access = evaluator.create_fast_access_buttons(evaluated, total)
+                            
+                            return (
+                                display_html,
+                                status,
+                                current_rating,
+                                current_comment,
+                                stats_text,
+                                fast_access,
+                                idx,
+                                total
+                            )
+                        
+                        # Initial load when component is first rendered
+                        item_display.load(
+                            fn=lambda: load_item(0),
+                            inputs=[],
+                            outputs=[
+                                item_display,
+                                status_text,
+                                rating_slider,
+                                comment_box,
+                                stats_md,
+                                fast_access_html,
+                                current_index_state,
+                                total_count_state
+                            ]
+                        )
+                        
+                        # Event handlers
+                        save_btn.click(
+                            fn=save_evaluation,
+                            inputs=[rating_slider, comment_box],
+                            outputs=[status_text]
+                        )
+                        
+                        next_btn.click(
+                            fn=lambda r, c: save_and_next(r, c),
+                            inputs=[rating_slider, comment_box],
+                            outputs=[
+                                item_display,
+                                status_text,
+                                rating_slider,
+                                comment_box,
+                                stats_md,
+                                fast_access_html,
+                                current_index_state,
+                                total_count_state
+                            ]
+                        )
+                        
+                        prev_btn.click(
+                            fn=lambda r, c: navigate_with_save("previous", r, c),
+                            inputs=[rating_slider, comment_box],
+                            outputs=[
+                                item_display,
+                                status_text,
+                                rating_slider,
+                                comment_box,
+                                stats_md,
+                                fast_access_html,
+                                current_index_state,
+                                total_count_state
+                            ]
+                        )
+                        
+                        first_btn.click(
+                            fn=lambda r, c: navigate_with_save("first", r, c),
+                            inputs=[rating_slider, comment_box],
+                            outputs=[
+                                item_display,
+                                status_text,
+                                rating_slider,
+                                comment_box,
+                                stats_md,
+                                fast_access_html,
+                                current_index_state,
+                                total_count_state
+                            ]
+                        )
+                        
+                        last_btn.click(
+                            fn=lambda r, c: navigate_with_save("last", r, c),
+                            inputs=[rating_slider, comment_box],
+                            outputs=[
+                                item_display,
+                                status_text,
+                                rating_slider,
+                                comment_box,
+                                stats_md,
+                                fast_access_html,
+                                current_index_state,
+                                total_count_state
+                            ]
+                        )
+                        
+                        jump_btn.click(
+                            fn=jump_to,
+                            inputs=[jump_input],
+                            outputs=[
+                                item_display,
+                                status_text,
+                                rating_slider,
+                                comment_box,
+                                stats_md,
+                                fast_access_html,
+                                current_index_state,
+                                total_count_state
+                            ]
+                        )
+                except Exception as e:
+                    import traceback
+                    with gr.Tab("📝 Manual Evaluation"):
+                        gr.Markdown(f"### ⚠️ Error loading manual evaluation\n\nError: {str(e)}\n\n```\n{traceback.format_exc()}\n```")
         
         # Event handlers
         def search_handler(query, top_k, alpha, rerank):
